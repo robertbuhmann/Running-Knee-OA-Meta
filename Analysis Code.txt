@@ -1,0 +1,164 @@
+### Running volume & knee OA prevalence review
+# Author: R Buhmann
+# Date: 25 August 2021
+
+library(netmeta)
+library(dplyr)
+library(dmetar)
+library(meta)
+library(metafor)
+
+#Read in data
+
+dat <- read.csv("MA Effect of Running.csv")
+
+#Remove studies that have not report an effect size, or, 
+##re-sample participants
+
+dat <- dat %>% filter(!Ee == "NA" & !Authors %in% c("Chakravarty et al. 2008","Kettunen et al. 2001", "Fries et al. 1994"))
+
+#Total number of runners, controls and participants
+
+runners <- sum(dat$Ne, na.rm = T)
+Control<- sum(dat$Nc, na.rm = T)
+runners + Control
+
+#Categorise Bias
+
+dat = dat %>%
+  mutate(Bias_cut = cut(Bias,
+                    breaks=c(0,3,6,7),
+                    labels=c("Very high", "High", "Low")))
+
+dat %>% group_by(Bias_cut) %>%
+  summarise(count = n())
+
+#Meta analysis (effect of running)
+
+#Log effect sizes and ranges to calculate standard error
+
+k = 3.92
+
+dat = dat %>%
+  mutate(TE.log = log(TE),
+         TE.lower.log = log(TE.lower),
+         TE.upper.log = log(TE.upper),
+         seTE.log = (TE.upper.log - TE.lower.log)/k)
+
+#meta-analysis
+
+meta1 <- metagen(TE.log, 
+        seTE.log, 
+        studlab = Authors,
+        method.tau = "SJ",
+        sm = "OR",
+        data = dat)
+meta1
+
+forest(meta1)
+
+#Sub-group analysis- Effect of running volume on OA prevalence
+
+#Read-in data
+
+dat_sub <- read.csv("MA Sub group analysis.csv")
+
+#Remove studies that have not reported running volume in control group, or, 
+##re-sample participants
+
+dat_sub <- dat_sub %>% filter(!Vol.c == "NA" & !TE == "NA" &
+                                !Authors %in% c("Fries et al. 1994", "Ward et al. 1995"))
+
+# Studies per subgroup
+
+table(dat_sub$Vol.sub)
+
+# No runners/controls in each sub group
+
+runners_total = sum(dat_sub$Ne, na.rm = T)
+control_total = sum(dat_sub$Nc, na.rm = T)
+
+sub_1 <- filter(dat_sub, Vol.sub == "(1) 8 to 32.1km")
+Ne <- sum(sub_1$Ne, na.rm = T)
+
+sub_2 <- filter(dat_sub, Vol.sub == "(2) 32.2 to 48km")
+Ne <- sum(sub_2$Ne, na.rm = T)
+
+sub_3 <- filter(dat_sub, Vol.sub == "(3) > 48km")
+Ne <- sum(sub_3$Ne, na.rm = T)
+
+#Analysis
+
+k = 3.92
+
+dat_sub = dat_sub %>%
+  mutate(TE.log = log(TE),
+         TE.lower.log = log(TE.lower),
+         TE.upper.log = log(TE.upper),
+         seTE.log = (TE.upper.log - TE.lower.log)/k)
+
+meta2 <- metagen(TE.log, 
+                 seTE.log, 
+                 studlab = Authors,
+                 method.tau = "SJ",
+                 sm = "OR",
+                 data = dat_sub)
+forest(meta2)
+
+meta.sub <- subgroup.analysis.mixed.effects(x = meta2, subgroups = dat_sub$Vol.sub)
+summary(meta.sub)
+
+meta.bias <- subgroup.analysis.mixed.effects(x = meta2, subgroups = dat_sub$Bias)
+summary(meta.bias)
+
+#Forest plot
+
+png(file = 'forestplot-subgroups.png', width = 8, height = 9.5, res = 600, units = "in") 
+forest(x = meta.sub,
+       rightlabs = c("OR", "95% CI"),
+       sortvar = meta.sub[["m.random"]][["TE"]],
+       xlab = "Favours running            Favours control",
+       prediction = F,
+       print.tau = T,
+       overall.hetstat = F,
+       overall = F)
+dev.off()
+
+#Find outliers
+
+meta1.outliers <- find.outliers(meta1)
+meta1.outliers
+forest(meta1.outliers)
+
+meta2.outliers.sub <- find.outliers(meta2)
+meta2.outliers.sub
+forest(meta2.outliers.sub)
+
+#Influence Analysis
+
+inf.analysis <- InfluenceAnalysis(x = meta1,
+                                  random = T)
+summary(inf.analysis)
+plot(inf.analysis, "influence")
+plot(inf.analysis, "baujat")
+
+##Sensitivity analysis
+#Overall:
+  #Largest: Drop Bruce et al. 1995
+  #Smallest: Drop Ponzio et al. 1992
+#Subgroups:
+#(1) Largest = Hootman et al. 2003 (1), smallest = Cloosterman et al. 2020
+#(2) Largest = Bruce et al. 2005, smallest = Panush et al. 1992
+#(3) Largest = Konradsen et al. 1990, smallest = Hootman et al. 2003 (3)
+
+##Publication Bias
+
+png(file = 'Supplement 3.png', width = 8, height = 6, res = 600, units = "in") 
+funnel(meta1,
+       contour = c(.95, .975, .99),
+       col.contour = c("darkblue", "blue","lightblue"))+
+  legend(3, 0, c("p < 0.05", "p < 0.025", "p < 0.01"), bty = "n",
+         fill = c("darkblue", "blue", "lightblue"))
+dev.off()
+
+eggers.test(x = meta1)

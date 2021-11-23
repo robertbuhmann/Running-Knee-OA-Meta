@@ -1,0 +1,158 @@
+### Running volume & knee OA prevalence review
+
+library(netmeta)
+library(dplyr)
+library(dmetar)
+library(meta)
+library(metafor)
+
+#Read in data
+dat <- read.csv("Running OA ES.csv")
+
+#Remove studies that have not report an effect size, or, 
+##re-sample participants
+
+dat <- dat %>% filter(!Authors == "Chakravarty et al. 2008" & !Authors == "Kettunen et al. 2001" &
+                          !Authors == "Kettunen et al. 1999" & !Authors == "Wang et al. 2002" &
+                          !Authors == "Fries et al. 1994" & !Authors == "Ward et al. 1995")
+
+
+#Total number of OA, controls and participants
+OA <- sum(dat$Ne)
+Control<- sum(dat$Nc)
+OA + Control
+
+#Categorise Bias
+dat$Bias <- cut(dat$Bias,
+                 breaks=c(0,3,6,7),
+                 labels=c("Very high", "High", "Low"))
+
+dat %>% group_by(Bias) %>%
+  summarise(count = n())
+
+
+#Meta analysis (effect of running)
+
+#Calculate error of effect size
+dat$TE <- log(dat$TE)
+dat$TE.lower <- log(dat$TE.lower)
+dat$TE.upper <- log(dat$TE.upper)
+dat$seTE <- (dat$TE.upper - dat$TE.lower)/3.92
+
+meta1 <- metagen(TE, 
+        seTE, 
+        studlab = Authors,
+        method.tau = "SJ",
+        sm = "OR",
+        data = dat)
+
+meta1
+forest(meta1)
+
+#Sub-group analysis
+
+#Running Volume
+
+meta.sub <- subgroup.analysis.mixed.effects(x = meta1, subgroups = dat$Vol.sub)
+summary(meta.sub)
+
+#Bias
+
+meta.bias <- subgroup.analysis.mixed.effects(x = meta1, subgroups = dat$Bias)
+summary(meta.bias)
+
+#Forest plot
+
+png(file = 'forestplot-subgroups.png', width = 8, height = 9.5, res = 600, units = "in") 
+forest(x = meta.sub,
+       comb.fixed = F,
+       overall = F,
+       sortvar = meta.sub[["m.random"]][["w.random"]],
+       xlab = "Favours running            Favours control",
+       rightlabs = c("OR", "95% CI"),
+       prediction = T,
+       col.predict = "black",
+       showweights = T)
+
+dev.off()
+
+#Find outliers
+
+meta1.outliers <- find.outliers(meta1)
+meta1.outliers
+forest(meta1.outliers)
+
+#Influence Analysis
+
+inf.analysis <- InfluenceAnalysis(x = meta1,
+                                  random = T)
+summary(inf.analysis)
+
+#influence plots --> look for values highlighted in red
+#baujat plot --> look for values in bottom right hand corner of graph,
+#these values contribute alot to the observed heterogeneity of studies but contribute minimally to pooled ES
+#consider values flagged in both sensitivity analysis and influence analysis
+
+plot(inf.analysis, "influence")
+##Look at DFFITS plot (shows diff in pooled effect in standard deviations without study), Cooks d and Covariance
+##ratio(ratio of variance:covriance with study included vs. excluded cov.r < 1 = more precise values)
+
+plot(inf.analysis, "baujat")
+##looking for values on right of plot
+##Sensitivity analysis:
+  #Largest: Drop Ward 1995
+  #Smallest: Drop Panush 1992
+
+plot(inf.analysis, "es")
+
+plot(inf.analysis, "i2")
+
+#GOSH plots
+m.rma <- rma(yi = meta1$TE, sei = meta1$seTE,
+             method = meta1$method.tau, test = "knha")
+
+dat.gosh <- gosh(m.rma)
+plot(dat.gosh, alpha = 0.1, col = "blue")
+gosh.diagnostics(dat.gosh)
+
+##update meta with outliers removed
+
+update.meta(meta1, exclude = c(9))
+update.meta(meta1, exclude = c(12))
+
+meta1 <- metagen(TE, 
+                 seTE, 
+                 studlab = Authors,
+                 method.tau = "SJ",
+                 sm = "OR",
+                 data = dat,
+                 exclude = c(10))
+meta1
+
+##Sensitivity analysis- remove smallest and largest weights
+
+dat3 <- filter(dat2, !Authors == "Hootman et al. 2003 (3)")
+
+meta1 <- metagen(TE, 
+                 seTE, 
+                 studlab = Authors,
+                 method.tau = "SJ",
+                 sm = "OR",
+                 data = dat3,
+                 comb.fixed = F,
+                 comb.random = T)
+
+meta.sub <- subgroup.analysis.mixed.effects(x = meta1, subgroups = dat3$Vol.sub)
+
+summary(meta.sub)
+forest(meta.sub)
+
+##Publication Bias
+funnel(meta1,
+       contour = c(.95, .975, .99),
+       col.contour = c("darkblue", "blue","lightblue"))+
+  legend(3, 0, c("p < 0.05", "p < 0.025", "p < 0.01"), bty = "n",
+         fill = c("darkblue", "blue", "lightblue"))
+
+eggers.test(x = meta1)
+
